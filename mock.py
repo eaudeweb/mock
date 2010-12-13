@@ -293,6 +293,7 @@ class Mock(object):
         self.call_count = 0
         self.call_args_list = []
         self.method_calls = []
+        self._expected = None
         for child in self._children.values():
             child.reset_mock()
         if isinstance(self._return_value, Mock):
@@ -340,9 +341,24 @@ class Mock(object):
 
         if self._wraps is not None and self._return_value is DEFAULT:
             return self._wraps(*args, **kwargs)
+        if self._expected is not None:
+            assert self._expected, "Mock object called more times than expected"
+            expected_args, ret_val = self._expected.pop(0)
+            assert expected_args == callargs((args, kwargs))
         if ret_val is DEFAULT:
             ret_val = self.return_value
         return ret_val
+
+
+    def expect(self, *args, **kwargs):
+        if self._expected is None:
+            self._expected = []
+        ret = kwargs.pop('return_value', None)
+        self._expected.append((callargs((args, kwargs)), ret))
+
+    def assert_expect_satisfied(self):
+        assert self._expected == [], (
+            "Expected calls not realized (%d calls)" % len(self._expected))
 
 
     def __getattr__(self, name):
