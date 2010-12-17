@@ -30,6 +30,7 @@ __unittest = True
 
 import sys
 import warnings
+from sets import Set as set
 
 try:
     import inspect
@@ -214,9 +215,9 @@ class Mock(object):
       `mock.__class__` returns the class of the spec object. This allows mocks
       to pass `isinstance` tests.
 
-    * ``spec_set``: A stricter variant of ``spec``. If used, attempting to *set*
-      or get an attribute on the mock that isn't on the object passed as
-      ``spec_set`` will raise an ``AttributeError``.
+    * ``spec_set``: A stricter variant of ``spec``. If used attempting to *set*
+       or get an attribute on the mock that isn't on the object passed as
+       ``spec_set`` will raise an ``AttributeError``.
 
     * ``side_effect``: A function to be called whenever the Mock is called. See
       the :attr:`Mock.side_effect` attribute. Useful for raising exceptions or
@@ -279,11 +280,11 @@ class Mock(object):
         self.reset_mock()
 
 
-    @property
     def __class__(self):
         if self._spec_class is None:
             return type(self)
         return self._spec_class
+    __class__ = property(__class__)
 
 
     def reset_mock(self):
@@ -549,7 +550,7 @@ class _patch(object):
             func.patchings.append(self)
             return func
 
-        @wraps(func)
+        #@wraps(func)
         def patched(*args, **keywargs):
             # don't use a with here (backwards compatability with 2.5)
             extra_args = []
@@ -575,26 +576,23 @@ class _patch(object):
     def get_original(self):
         target = self.target
         name = self.attribute
+        create = self.create
 
         original = DEFAULT
-        local = False
-
-        try:
-            original = target.__dict__[name]
-        except (AttributeError, KeyError):
-            original = getattr(target, name, DEFAULT)
-        else:
-            local = True
-
-        if not self.create and original is DEFAULT:
+        if _has_local_attr(target, name):
+            try:
+                original = target.__dict__[name]
+            except AttributeError:
+                # for instances of classes with slots, they have no __dict__
+                original = getattr(target, name)
+        elif not create and not hasattr(target, name):
             raise AttributeError("%s does not have the attribute %r" % (target, name))
-        return original, local
+        return original
 
 
     def __enter__(self):
-        """Perform the patch."""
         new, spec, spec_set = self.new, self.spec, self.spec_set
-        original, local = self.get_original()
+        original = self.get_original()
         if new is DEFAULT:
             # XXXX what if original is DEFAULT - shouldn't use it as a spec
             inherit = False
@@ -612,26 +610,24 @@ class _patch(object):
                 new.return_value = Mock(spec=spec, spec_set=spec_set)
         new_attr = new
         if self.mocksignature:
-            new_attr = mocksignature(original, new)
+            original_for_sig = original
+            if original is DEFAULT and not self.create:
+                # for mocking signature on methods with
+                # patch.object(...)
+                original_for_sig = getattr(self.target, self.attribute)
+            new_attr = mocksignature(original_for_sig, new)
 
         self.temp_original = original
-        self.is_local = local
         setattr(self.target, self.attribute, new_attr)
         return new
 
 
     def __exit__(self, *_):
-        """Undo the patch."""
-        if self.is_local and self.temp_original is not DEFAULT:
+        if self.temp_original is not DEFAULT:
             setattr(self.target, self.attribute, self.temp_original)
         else:
             delattr(self.target, self.attribute)
-            if not self.create and not hasattr(self.target, self.attribute):
-                # needed for proxy objects like django settings
-                setattr(self.target, self.attribute, self.temp_original)
-
         del self.temp_original
-        del self.is_local
 
     start = __enter__
     stop = __exit__
@@ -709,7 +705,9 @@ def patch(target, new=DEFAULT, spec=None, create=False,
     use-cases.
     """
     try:
-        target, attribute = target.rsplit('.', 1)
+        target_bits = target.split('.')
+        attribute = target_bits[-1]
+        target = '.'.join(target_bits[:-1])
     except (TypeError, ValueError):
         raise TypeError("Need a valid target to patch. You supplied: %r" %
                         (target,))
@@ -749,13 +747,13 @@ class _patch_dict(object):
     def __call__(self, f):
         if isinstance(f, class_types):
             return self.decorate_class(f)
-        @wraps(f)
         def _inner(*args, **kw):
             self._patch_dict()
             try:
                 return f(*args, **kw)
             finally:
                 self._unpatch_dict()
+        wraps(f)(_inner)
 
         return _inner
 
@@ -771,12 +769,10 @@ class _patch_dict(object):
 
 
     def __enter__(self):
-        """Patch the dict."""
         self._patch_dict()
 
 
     def _patch_dict(self):
-        """Unpatch the dict."""
         values = self.values
         in_dict = self.in_dict
         clear = self.clear
@@ -857,8 +853,8 @@ magic_methods = (
 )
 
 numerics = "add sub mul div truediv floordiv mod lshift rshift and xor or pow "
-inplace = ' '.join('i%s' % n for n in numerics.split())
-right = ' '.join('r%s' % n for n in numerics.split())
+inplace = ' '.join([('i%s' % n) for n in numerics.split()])
+right = ' '.join([('r%s' % n) for n in numerics.split()])
 extra = ''
 if inPy3k:
     extra = 'bool next '
@@ -870,13 +866,13 @@ else:
 # (as they are metaclass methods)
 # __del__ is not supported at all as it causes problems if it exists
 
-_non_defaults = set('__%s__' % method for method in [
+_non_defaults = set(['__%s__' % method for method in [
     'cmp', 'getslice', 'setslice', 'coerce', 'subclasses',
     'dir', 'format', 'get', 'set', 'delete', 'reversed',
     'missing', 'reduce', 'reduce_ex', 'getinitargs',
     'getnewargs', 'getstate', 'setstate', 'getformat',
     'setformat', 'repr'
-])
+]])
 
 
 def get_method(name, func):
@@ -886,7 +882,7 @@ def get_method(name, func):
     return method
 
 
-_magics = set('__%s__' % method for method in ' '.join([magic_methods, numerics, inplace, right, extra]).split())
+_magics = set(['__%s__' % method for method in ' '.join([magic_methods, numerics, inplace, right, extra]).split()])
 
 _all_magics = _magics | _non_defaults
 
